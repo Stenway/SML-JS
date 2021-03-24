@@ -126,7 +126,7 @@ class BasicWsvParser {
 			if (iterator.isWhitespace() || iterator.is(CODEPOINT_HASH)) {
 				break;
 			} else if (iterator.is(CODEPOINT_DOUBLEQUOTE) ) {
-				throw iterator.getException("Invalid double quote");
+				throw iterator.getException("Invalid double quote in value");
 			}
 		}
 		return String.fromCodePoint(...iterator.getSlice(startIndex));
@@ -146,7 +146,7 @@ class BasicWsvParser {
 					value += '"';
 				} else if (iterator.is(CODEPOINT_SLASH)) { 
 					if (!(iterator.next() && iterator.is(CODEPOINT_DOUBLEQUOTE))) {
-						throw iterator.getException("Invalid line break");
+						throw iterator.getException("Invalid string line break");
 					}
 					value += '\n';
 				} else if (iterator.isWhitespace() || iterator.is(CODEPOINT_HASH)) {
@@ -174,6 +174,17 @@ class BasicWsvParser {
 }
 
 class BasicWsvSerializer {
+	static needsDoubleQuotes(value) {
+		if (value == null) {
+			return false;
+		} else if (value.length == 0 || value == "-") {
+			return true;
+		}
+		
+		var chars = WsvChar.getCodePoints(value);
+		return this.__containsSpecialChar(chars);
+	}
+	
 	static __containsSpecialChar(chars) {
 		for (var c of chars) {
 			if (WsvChar.isWhitespace(c) || c == CODEPOINT_DOUBLEQUOTE || c == CODEPOINT_HASH) {
