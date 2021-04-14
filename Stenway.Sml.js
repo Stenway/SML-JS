@@ -24,6 +24,18 @@ class SmlDocument {
 	getEndKeyword() {
 		return this.endKeyword;
 	}
+	
+	toString() {
+		return SmlSerializer.serializeDocumentNonPreserving(this);
+	}
+	
+	toStringMinified() {
+		return SmlSerializer.serializeDocumentNonPreserving(this, true);
+	}
+	
+	static parse(content) {
+		return SmlParser.parseDocumentNonPreserving(content);
+	}
 }
 
 class SmlNode {
@@ -68,6 +80,18 @@ class SmlElement extends SmlNamedNode {
 		this.nodes.push(node);
 	}
 	
+	hasElements() {
+		return this.elements().length > 0;
+	}
+		
+	elements(name) {
+		if (name === undefined || name === null) {
+			return this.nodes.filter(node => node instanceof SmlElement);
+		} else {
+			return this.nodes.filter(node => node.isElementWithName(name));
+		}
+	}
+	
 	hasElement(name) {
 		return this.nodes.find(node => node.isElementWithName(name)) != undefined;
 	}
@@ -76,8 +100,16 @@ class SmlElement extends SmlNamedNode {
 		return this.nodes.find(node => node.isElementWithName(name));
 	}
 	
-	elements(name) {
-		return this.nodes.filter(node => node.isElementWithName(name));
+	hasAttributes() {
+		return this.attributes().length > 0;
+	}
+		
+	attributes(name) {
+		if (name === undefined || name === null) {
+			return this.nodes.filter(node => node instanceof SmlAttribute);
+		} else {
+			return this.nodes.filter(node => node.isAttributeWithName(name));
+		}
 	}
 	
 	hasAttribute(name) {
@@ -87,11 +119,7 @@ class SmlElement extends SmlNamedNode {
 	attribute(name) {
 		return this.nodes.find(node => node.isAttributeWithName(name));
 	}
-	
-	attributes(name) {
-		return this.nodes.filter(node => node.isAttributeWithName(name));
-	}
-	
+		
 	addAttribute(name, values) {
 		this.add(new SmlAttribute(name, values));
 	}
@@ -102,6 +130,10 @@ class SmlElement extends SmlNamedNode {
 			strValue = String(value);
 		}
 		this.addAttribute(name, [strValue]);
+	}
+	
+	getString(name) {
+		return this.attribute(name).values[0];
 	}
 	
 	addElement(name) {
@@ -122,10 +154,6 @@ class SmlAttribute extends SmlNamedNode {
 	getString() {
 		return this.values[0];
 	}
-	
-	/*set values(valueArray) {
-		__values
-	}*/
 }
 
 class SmlError extends Error {
@@ -135,17 +163,17 @@ class SmlError extends Error {
 	}
 }
 
-class BasicSmlParserError extends Error {
+class SmlParserError extends Error {
 	constructor(lineIndex, message) {
 		super(`${message} (${lineIndex+1})`);
-		this.name = "BasicSmlParserError";
+		this.name = "SmlParserError";
 		this.lineIndex = lineIndex;
 	}
 }
 
-class BasicWsvLineIterator {
+class WsvJaggedArrayLineIterator {
 	constructor(content) {
-		this.lines = BasicWsvParser.parseDocument(content);	
+		this.lines = WsvParser.parseDocumentNonPreserving(content);	
 		this.index = 0;
 		this.__detectEndKeyword();
 	}
@@ -179,15 +207,15 @@ class BasicWsvLineIterator {
 				break;
 			}
 		}
-		throw new BasicSmlParserError(this.lines.length-1, "End keyword could not be detected");
+		throw new SmlParserError(this.lines.length-1, "End keyword could not be detected");
 	}
 
 	getException(message) {
-		return new BasicSmlParserError(this.index, message);
+		return new SmlParserError(this.index, message);
 	}
 	
 	getLastLineException(message) {
-		return new BasicSmlParserError(this.index-1, message);
+		return new SmlParserError(this.index-1, message);
 	}
 }
 
@@ -199,16 +227,16 @@ class SmlUtils {
 	}
 }
 
-class BasicSmlParser {
-	static parseDocument(content) {
-		var iterator = new BasicWsvLineIterator(content);
+class SmlParser {
+	static parseDocumentNonPreserving(content) {
+		var iterator = new WsvJaggedArrayLineIterator(content);
 		
 		this.__skipEmptyLines(iterator);
 		if (!iterator.hasLine()) {
 			throw iterator.getException("Root element expected");
 		}
 		
-		var node = this.__readNode(iterator);
+		var node = this.__readNodeNonPreserving(iterator);
 		if (!(node instanceof SmlElement)) {
 			throw iterator.getLastLineException("Invalid root element start");
 		}
@@ -229,7 +257,7 @@ class BasicSmlParser {
 		}
 	}
 	
-	static __readNode(iterator) {
+	static __readNodeNonPreserving(iterator) {
 		var line = iterator.getLine();
 		
 		var name = line[0];
@@ -244,7 +272,7 @@ class BasicSmlParser {
 				throw iterator.getLastLineException("Null value as element name is not allowed");
 			}
 			var element = new SmlElement(name);
-			this.__readElementContent(iterator, element);
+			this.__readElementContentNonPreserving(iterator, element);
 			return element;
 		} else {
 			if (name == null) {
@@ -256,13 +284,13 @@ class BasicSmlParser {
 		}
 	}
 	
-	static __readElementContent(iterator, element) {
+	static __readElementContentNonPreserving(iterator, element) {
 		while (true) {
+			this.__skipEmptyLines(iterator);
 			if (!iterator.hasLine()) {
 				throw iterator.getLastLineException("Element \""+element.name+"\" not closed");
 			}
-			this.__skipEmptyLines(iterator);
-			var node = this.__readNode(iterator);
+			var node = this.__readNodeNonPreserving(iterator);
 			if (node == null) {
 				break;
 			}
@@ -271,49 +299,86 @@ class BasicSmlParser {
 	}
 }
 
-class BasicSmlSerializer {
-	static serializeDocument(document) {
+class SmlSerializer {
+	static serializeDocumentNonPreserving(document, minified = false) {
 		var result = "";
 		var defaultIndentation = document.getDefaultIndentation();
 		if (defaultIndentation == null) {
 			defaultIndentation = "\t";
 		}
-		result = this.__serializeElement(document.root, 0, defaultIndentation, document.getEndKeyword());
+		var endKeyword = document.getEndKeyword();
+		if (minified) {
+			defaultIndentation = "";
+			endKeyword = null;
+		}
+		result = this.__serializeElementNonPreserving(document.root, 0, defaultIndentation, endKeyword);
 		return result.slice(0, -1);
 	}
 
-	static __serializeElement(element, level, defaultIndentation, endKeyword) {
+	static __serializeElementNonPreserving(element, level, defaultIndentation, endKeyword) {
 		var result = "";
 		result += this.__serializeIndentation(level, defaultIndentation);
-		result += BasicWsvSerializer.serializeValue(element.name);
+		result += WsvSerializer.serializeValue(element.name);
 		result += '\n'; 
 
 		var childLevel = level + 1;
 		for (var child of element.nodes) {
 			if (child instanceof SmlElement) {
-				result += this.__serializeElement(child, childLevel, defaultIndentation, endKeyword);
+				result += this.__serializeElementNonPreserving(child, childLevel, defaultIndentation, endKeyword);
 			} else if (child instanceof SmlAttribute) {
-				result += this.__serializeAttribute(child, childLevel, defaultIndentation);
+				result += this.__serializeAttributeNonPreserving(child, childLevel, defaultIndentation);
 			}
 		}
 		
 		result += this.__serializeIndentation(level, defaultIndentation);
-		result += BasicWsvSerializer.serializeValue(endKeyword);
+		result += WsvSerializer.serializeValue(endKeyword);
 		result += '\n';
 		return result;
 	}
 	
-	static __serializeAttribute(attribute, level, defaultIndentation) {
+	static __serializeAttributeNonPreserving(attribute, level, defaultIndentation) {
 		var result = "";
 		result += this.__serializeIndentation(level, defaultIndentation);
-		result += BasicWsvSerializer.serializeValue(attribute.name);
+		result += WsvSerializer.serializeValue(attribute.name);
 		result += ' '; 
-		result += BasicWsvSerializer.serializeLine(attribute.values);
+		result += WsvSerializer.serializeValues(attribute.values);
 		result += '\n';
 		return result;
 	}
 	
 	static __serializeIndentation(level, defaultIndentation) {
 		return defaultIndentation.repeat(level);
+	}
+}
+
+class SmlRequest {
+	constructor(url, callback, errorCallback) {
+		this.xhr = new XMLHttpRequest();
+		
+		this.xhr.onreadystatechange = function() {
+			if (this.readyState == 4) {
+				if (this.status == 200) {
+					var response = this.responseText;
+					try {
+						var doc = SmlDocument.parse(response);
+						callback(doc);
+					} catch(err) {
+						errorCallback(err, response);
+					}					
+				} else {
+					if (errorCallback !== null) {
+						errorCallback(this.status);
+					}
+				}
+			}
+		};
+		this.xhr.open('POST', url);
+	}
+	
+	send(document) {
+		var smlRequest = document.toStringMinified();
+		var data = new FormData();
+		data.append("smlRequest", smlRequest);
+		this.xhr.send(data);
 	}
 }
